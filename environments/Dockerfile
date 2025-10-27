@@ -30,6 +30,8 @@ RUN cd /source && \
     poetry install --no-interaction --no-ansi && \
     mkdir /tmp/dist && \
     poetry export --without-hashes -o /tmp/dist/requirements.txt
+COPY ../wheels /source/wheels 
+RUN pip install /source/wheels/*.whl
 
 # -------------------------------------------------------------------------------------
 # Build Apps in plugins folder

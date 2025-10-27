@@ -30,12 +30,12 @@ def is_truthy(arg):
 
 # Use pyinvoke configuration for default values, see http://docs.pyinvoke.org/en/stable/concepts/configuration.html
 # Variables may be overwritten in invoke.yml or by the environment variables INVOKE_NAUTOBOT_xxx
-namespace = Collection("nautobot_docker_compose")
+namespace = Collection("docker_compose")
 namespace.configure(
     {
-        "nautobot_docker_compose": {
-            "project_name": "nautobot_docker_compose",
-            "python_ver": "3.8",
+        "docker_compose": {
+            "project_name": "docker_compose",
+            "python_ver": "3.12",
             "local": False,
             "use_django_extensions": True,
             "compose_dir": os.path.join(os.path.dirname(__file__), "environments/"),
@@ -85,23 +85,26 @@ def docker_compose(context, command, **kwargs):
         **kwargs: Passed through to the context.run() call.
     """
     compose_env = {
-        "PYTHON_VER": context.nautobot_docker_compose.python_ver,
+        "PYTHON_VER": context.docker_compose.python_ver,
         "NAUTOBOT_VERSION": NAUTOBOT_VERSION,
     }
-    compose_command = f'docker compose --project-name {context.nautobot_docker_compose.project_name} --project-directory "{context.nautobot_docker_compose.compose_dir}"'
-    for compose_file in context.nautobot_docker_compose.compose_files:
+    compose_command = f'docker compose --project-name {context.docker_compose.project_name} --project-directory "{context.docker_compose.compose_dir}"'
+    for compose_file in context.docker_compose.compose_files:
         compose_file_path = os.path.join(
-            context.nautobot_docker_compose.compose_dir, compose_file
+            context.docker_compose.compose_dir, compose_file
         )
         compose_command += f' -f "{compose_file_path}"'
     compose_command += f" {command}"
+    service = kwargs.pop("service", None)
+    if service:
+        compose_command += f" {service}"
     print(f'Running docker compose command "{command}"')
     return context.run(compose_command, env=compose_env, **kwargs)
 
 
 def run_command(context, command, **kwargs):
     """Run a command locally or inside the nautobot container."""
-    if is_truthy(context.nautobot_docker_compose.local):
+    if is_truthy(context.docker_compose.local):
         context.run(command)
     else:
         # Check if nautobot is running, no need to start another nautobot container to run a command
@@ -134,7 +137,7 @@ def build(context, force_rm=False, cache=True):
         command += " --force-rm"
 
     print(
-        f"Building Nautobot {NAUTOBOT_VERSION} with Python {context.nautobot_docker_compose.python_ver}..."
+        f"Building Nautobot {NAUTOBOT_VERSION} with Python {context.docker_compose.python_ver}..."
     )
     docker_compose(context, command)
 
@@ -183,7 +186,7 @@ def destroy(context):
 @task
 def nbshell(context):
     """Launch an interactive nbshell session."""
-    if context.nautobot_docker_compose.use_django_extensions:
+    if context.docker_compose.use_django_extensions:
         command = "nautobot-server shell_plus"
     else:
         command = "nautobot-server nbshell"
@@ -240,8 +243,8 @@ def post_upgrade(context):
 def import_nautobot_data(context):
     """Import nautobot_data.json."""
     # This task expects to be run in the docker container for now
-    context.nautobot_docker_compose.local = False
-    copy_cmd = f"docker cp nautobot_data.json {context.nautobot_docker_compose.project_name}_nautobot_1:/tmp/nautobot_data.json"
+    context.docker_compose.local = False
+    copy_cmd = f"docker cp nautobot_data.json {context.docker_compose.project_name}_nautobot_1:/tmp/nautobot_data.json"
     import_cmd = "nautobot-server import_nautobot_json /tmp/nautobot_data.json 2.10.4"
     print("Starting Nautobot")
     start(context)
@@ -259,12 +262,12 @@ def db_export(context):
     sleep(2)  # Wait for the database to be ready
 
     print("Exporting the database as an SQL dump...")
-    if "docker-compose.mysql.yml" in context.nautobot_docker_compose.compose_files:
+    if "docker-compose.mysql.yml" in context.docker_compose.compose_files:
         export_cmd = 'exec db sh -c "mysqldump -u \${NAUTOBOT_DB_USER} –p \${NAUTOBOT_DB_PASSWORD} \${NAUTOBOT_DB_NAME} nautobot > /tmp/nautobot.sql"'  # noqa: W605 pylint: disable=anomalous-backslash-in-string
-        copy_cmd = f"docker cp {context.nautobot_docker_compose.project_name}-db-1:/tmp/nautobot.sql nautobot.sql"
+        copy_cmd = f"docker cp {context.docker_compose.project_name}-db-1:/tmp/nautobot.sql nautobot.sql"
     else:
         export_cmd = 'exec db sh -c "pg_dump -h localhost -d \${NAUTOBOT_DB_NAME} -U \${NAUTOBOT_DB_USER} > /tmp/nautobot.sql"'  # noqa: W605 pylint: disable=anomalous-backslash-in-string
-        copy_cmd = f"docker cp {context.nautobot_docker_compose.project_name}-db-1:/tmp/nautobot.sql nautobot.sql"
+        copy_cmd = f"docker cp {context.docker_compose.project_name}-db-1:/tmp/nautobot.sql nautobot.sql"
     docker_compose(context, export_cmd, pty=True)
     print("Copying the SQL Dump locally...")
     context.run(copy_cmd)
@@ -280,13 +283,32 @@ def db_import(context):
     sleep(2)
 
     print("Copying DB Dump to DB container...\n")
-    if "docker-compose.mysql.yml" in context.nautobot_docker_compose.compose_files:
-        copy_cmd = f"docker cp nautobot.sql {context.nautobot_docker_compose.project_name}-db-1:/tmp/nautobot.sql"
+    if "docker-compose.mysql.yml" in context.docker_compose.compose_files:
+        copy_cmd = f"docker cp nautobot.sql {context.docker_compose.project_name}-db-1:/tmp/nautobot.sql"
         import_cmd = 'exec db sh -c "mysql -u \${NAUTOBOT_DB_USER} –p \${NAUTOBOT_DB_PASSWORD} < /tmp/nautobot.sql"'  # noqa: W605 pylint: disable=anomalous-backslash-in-string
     else:
-        copy_cmd = f"docker cp nautobot.sql {context.nautobot_docker_compose.project_name}-db-1:/tmp/nautobot.sql"
+        copy_cmd = f"docker cp nautobot.sql {context.docker_compose.project_name}-db-1:/tmp/nautobot.sql"
         import_cmd = 'exec db sh -c "psql -h localhost -U \${NAUTOBOT_DB_USER} < /tmp/nautobot.sql"'  # noqa: W605 pylint: disable=anomalous-backslash-in-string
     context.run(copy_cmd)
 
     print("Importing DB...\n")
     docker_compose(context, import_cmd, pty=True)
+
+
+@task(
+    help={
+        "service": "If specified, only display logs for this service (default: nautobot)",
+        "follow": "Flag to follow logs (default: False)",
+        "tail": "Tail N number of lines (default: all)",
+    }
+)
+def logs(context, service="nautobot", follow=False, tail=0):
+    """View the logs of a docker compose service."""
+    command = "logs"
+
+    if follow:
+        command += " --follow"
+    if tail:
+        command += f" --tail={tail}"
+
+    docker_compose(context, command, service=service)
